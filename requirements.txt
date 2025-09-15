@@ -1,0 +1,9 @@
+asgiref==3.9.1
+django==4.2.24
+djangorestframework==3.16.1
+djangorestframework-simplejwt==5.5.1
+psycopg2-binary==2.9.10
+PyJWT==2.10.1
+python-decouple
+sqlparse==0.5.3
+typing-extensions==4.15.0
