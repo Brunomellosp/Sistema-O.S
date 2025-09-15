@@ -1,0 +1,107 @@
+@base_url = http://127.0.0.1:8000/api/v1
+
+###
+# 1. Registrar novo usuário
+POST {{base_url}}/auth/register/
+Content-Type: application/json
+
+{
+  "username": "testeuser",
+  "email": "teste@exemplo.com",
+  "password": "123senha"
+}
+
+###
+
+# 2. Registrar outro novo usuário
+POST {{base_url}}/auth/register/
+Content-Type: application/json
+
+{
+  "username": "BrunoMello",
+  "email": "brunomello@exemplo.com",
+  "password": "senha123"
+}
+
+###
+
+# 3. Fazer login 
+POST {{base_url}}/auth/login/
+Content-Type: application/json
+
+{
+  "username": "BrunoMello",
+  "password": "senha123"
+}
+
+###
+
+@access_token = token_vindo_da_resposta
+
+###
+
+# 4. Criar uma nova ordem de serviço
+POST {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "cliente": "Cliente Windows Ltda",
+  "descricao": "Instalar o Windows 11.",
+  "prioridade": "alta"
+}
+
+###
+
+# 5. Criar outra nova ordem de serviço
+POST {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "cliente": "Cliente MacBook Ltda",
+  "descricao": "Instalar o MASOS 15.",
+  "prioridade": "baixa"
+}
+
+###
+
+# 6. Listar todas as ordens de serviço
+GET {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}
+
+###
+
+@ID = id_vindo_da_resposta
+
+###
+
+# 7. Obter uma ordem de serviço específica
+GET {{base_url}}/ordens-servico/{{ID}}/
+Authorization: Bearer {{access_token}}
+
+###
+
+# 8. Atualizar uma ordem de serviço
+PUT {{base_url}}/ordens-servico/{{ID}}/
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "cliente": "Cliente Windows Ltda",
+  "descricao": "Atualizacao concluida.",
+  "prioridade": "alta",
+  "status": "concluida"
+}
+
+###
+
+# 9. Deletar uma ordem de serviço
+DELETE {{base_url}}/ordens-servico/{{ID}}/
+Authorization: Bearer {{access_token}}
+
+###
+
+# 10. Listar novamente todas as ordens de serviço
+GET {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}
