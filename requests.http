@@ -8,7 +8,9 @@ Content-Type: application/json
 {
   "username": "testeuser",
   "email": "teste@exemplo.com",
-  "password": "123senha"
+  "password": "123senha",
+  "first_name": "Teste",
+  "last_name": "User"
 }
 
 ###
@@ -20,7 +22,9 @@ Content-Type: application/json
 {
   "username": "BrunoMello",
   "email": "brunomello@exemplo.com",
-  "password": "senha123"
+  "password": "senha123",
+  "first_name": "Bruno",
+  "last_name": "Mello"
 }
 
 ###
@@ -35,8 +39,8 @@ Content-Type: application/json
 }
 
 ###
-
-@access_token = token_vindo_da_resposta
+# Salva o token de acesso da resposta
+@access_token = Token_Vindo_da_Resposta
 
 ###
 
@@ -46,9 +50,15 @@ Authorization: Bearer {{access_token}}
 Content-Type: application/json
 
 {
-  "cliente": "Cliente Windows Ltda",
-  "descricao": "Instalar o Windows 11.",
-  "prioridade": "alta"
+  "protocol": "PROT-2025-001",
+  "so_number": "OS-001",
+  "type": "installation",
+  "status": "open",
+  "provider": "technical",
+  "priority": "high",
+  "recipient_name": "Cliente Windows Ltda",
+  "cpf": "123.456.789-00",
+  "description": "Instalar o Windows 11 em 5 máquinas."
 }
 
 ###
@@ -59,9 +69,15 @@ Authorization: Bearer {{access_token}}
 Content-Type: application/json
 
 {
-  "cliente": "Cliente MacBook Ltda",
-  "descricao": "Instalar o MASOS 15.",
-  "prioridade": "baixa"
+  "protocol": "PROT-2025-002",
+  "so_number": "OS-002",
+  "type": "preventive_maintenance",
+  "status": "in_progress",
+  "provider": "specialized",
+  "priority": "low",
+  "recipient_name": "Cliente MacBook Ltda",
+  "cpf": "987.654.321-00",
+  "description": "Verificação anual no servidor macOS."
 }
 
 ###
@@ -72,8 +88,7 @@ Authorization: Bearer {{access_token}}
 
 ###
 
-@ID = id_vindo_da_resposta
-
+@ID =  Id_Vindo_da_Resposta
 ###
 
 # 7. Obter uma ordem de serviço específica
@@ -83,15 +98,13 @@ Authorization: Bearer {{access_token}}
 ###
 
 # 8. Atualizar uma ordem de serviço
-PUT {{base_url}}/ordens-servico/{{ID}}/
+PATCH {{base_url}}/ordens-servico/{{ID}}/
 Authorization: Bearer {{access_token}}
 Content-Type: application/json
 
 {
-  "cliente": "Cliente Windows Ltda",
-  "descricao": "Atualizacao concluida.",
-  "prioridade": "alta",
-  "status": "concluida"
+  "description": "Instalação do Windows 11 concluída com sucesso.",
+  "status": "completed"
 }
 
 ###
@@ -103,5 +116,32 @@ Authorization: Bearer {{access_token}}
 ###
 
 # 10. Listar novamente todas as ordens de serviço
+GET {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}
+
+###
+
+# 11. Importar CSV (Apenas Admin)
+# (Para testar, o usuário 'BrunoMello' deve ser 'is_staff=True' no Django Admin)
+# (O 'boundary' pode variar, este é um exemplo padrão)
+
+POST {{base_url}}/ordens-servico/importar-csv/
+Authorization: Bearer {{access_token}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="import.csv"
+Content-Type: text/csv
+
+protocol,so_number,type,status,recipient_name,cpf,provider,priority,description
+PROT-100,OS-100,administrative,open,Cliente CSV 1,111.111.111-11,technical,low,Descricao do CSV 1
+PROT-101,OS-101,installation,in_progress,Cliente CSV 2,222.222.222-22,specialized,high,Descricao do CSV 2
+PROT-102,OS-102,budget,open,Cliente CSV 3,333.333.333-33,consulting,medium,Descricao do CSV 3
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+###
+
+# 12. Listar todas as ordens de serviço
 GET {{base_url}}/ordens-servico/
 Authorization: Bearer {{access_token}}
