@@ -1,0 +1,223 @@
+@base_url = http://127.0.0.1:8000/api/v1
+
+###
+# ===================================================================
+# 1. AUTENTICAÇÃO E PERFIL
+# ===================================================================
+
+###
+# 1. Registrar novo usuário (Admin)
+# (Vá no /admin e marque 'is_staff' = True para este usuário)
+POST {{base_url}}/auth/register/
+Content-Type: application/json
+
+{
+  "username": "BrunoMelloAdmin",
+  "email": "bruno@exemplo.com",
+  "password": "senha123",
+  "first_name": "Bruno",
+  "last_name": "Mello"
+}
+
+###
+# 2. Fazer login 
+# @name login
+POST {{base_url}}/auth/login/
+Content-Type: application/json
+
+{
+  "username": "BrunoMelloAdmin",
+  "password": "senha123"
+}
+
+###
+# Salva o token de acesso da resposta
+# (Em clientes VS Code, isso é feito automaticamente)
+@access_token = {{login.response.body.access}}
+
+###
+# ===================================================================
+# 3. NOVOS ENDPOINTS DE PERFIL DE USUÁRIO
+# ===================================================================
+
+###
+# NOVO: 3.1 Obter dados do usuário logado
+# Retorna os dados do usuário atual e 'is_staff'
+GET {{base_url}}/auth/user/
+Authorization: Bearer {{access_token}}
+
+###
+# NOVO: 3.2 Atualizar perfil do usuário logado
+# Permite ao usuário editar o próprio nome/email
+PATCH {{base_url}}/auth/user/
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "first_name": "Bruno",
+  "last_name": "Mello (Editado)"
+}
+
+###
+# ===================================================================
+# 4. CRIAR ORDENS DE SERVIÇO
+# ===================================================================
+
+###
+# 4.1 Criar uma nova ordem de serviço (Alta Prioridade)
+# @name criar_os_alta_prioridade
+POST {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "protocol": "PROT-2025-001",
+  "so_number": "OS-001",
+  "type": "installation",
+  "status": "open",
+  "provider": "technical",
+  "priority": "high",
+  "recipient_name": "Cliente Windows Ltda",
+  "cpf": "123.456.789-00",
+  "description": "Instalar o Windows 11 em 5 máquinas."
+}
+
+###
+# 4.2 Criar outra nova ordem de serviço (Baixa Prioridade)
+POST {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{ 
+  "protocol": "PROT-2025-002",
+  "so_number": "OS-002",
+  "type": "preventive_maintenance",
+  "status": "in_progress",
+  "recipient_name": "Cliente MacBook Ltda",
+  "cpf": "987.654.321-00",
+  "provider": "specialized",
+  "priority": "low",
+  "description": "Verificação anual no servidor macOS."
+}
+
+###
+# 4.3 Criar OS para teste de filtro
+POST {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{ 
+  "protocol": "PROT-2025-005",
+  "so_number": "OS-003",
+  "type": "budget",
+  "status": "open",
+  "recipient_name": "Cliente Orçamento Ltda",
+  "cpf": "111.222.333-44",
+  "provider": "consulting",
+  "priority": "medium",
+  "description": "Orçamento para 10 licenças Windows."
+}
+
+
+###
+# ===================================================================
+# 5. NOVOS TESTES DE LISTAGEM (PAGINAÇÃO, FILTRO, ORDENAÇÃO)
+# ===================================================================
+
+###
+# NOVO: 5.1 Listar O.S. (Base com Paginação e SLA)
+# Repare na resposta: { "count": ..., "results": [...] }
+# E nos campos de SLA: "due_date", "sla_status", "cpf_anonimo"
+GET {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}
+
+###
+# NOVO: 5.2 Teste de Paginação
+# Pede a página 1, com apenas 2 itens por página
+GET {{base_url}}/ordens-servico/?page=1&page_size=2
+Authorization: Bearer {{access_token}}
+
+###
+# NOVO: 5.3 Teste de Filtro (status=open)
+# Mostra apenas as OS com status "open"
+GET {{base_url}}/ordens-servico/?status=open
+Authorization: Bearer {{access_token}}
+
+###
+# NOVO: 5.4 Teste de Busca (search=windows)
+# Mostra OS que mencionam "windows"
+GET {{base_url}}/ordens-servico/?search=windows
+Authorization: Bearer {{access_token}}
+
+###
+# NOVO: 5.5 Teste de Filtro Combinado
+# Mostra OS com status "open" E prioridade "high"
+GET {{base_url}}/ordens-servico/?status=open&priority=high
+Authorization: Bearer {{access_token}}
+
+###
+# NOVO: 5.6 Teste de Ordenação (Mais novas primeiro)
+# O prefixo '-' significa descendente (DESC)
+GET {{base_url}}/ordens-servico/?ordering=-criado_em
+Authorization: Bearer {{access_token}}
+
+###
+# ===================================================================
+# 6. CRUD (DETALHE, UPDATE, DELETE)
+# ===================================================================
+
+###
+# Salva o ID da primeira OS criada
+@ID_OS_001 = {{criar_os_alta_prioridade.response.body.id}}
+
+###
+# 6.1 Obter uma ordem de serviço específica
+# Repare nos campos de SLA calculados
+GET {{base_url}}/ordens-servico/{{ID_OS_001}}/
+Authorization: Bearer {{access_token}}
+
+###
+# 6.2 Atualizar uma ordem de serviço (PATCH)
+PATCH {{base_url}}/ordens-servico/{{ID_OS_001}}/
+Authorization: Bearer {{access_token}}
+Content-Type: application/json
+
+{
+  "description": "Instalação do Windows 11 concluída com sucesso.",
+  "status": "completed"
+}
+
+###
+# 6.3 Deletar uma ordem de serviço
+DELETE {{base_url}}/ordens-servico/{{ID_OS_001}}/
+Authorization: Bearer {{access_token}}
+
+
+###
+# ===================================================================
+# 7. IMPORTAÇÃO CSV (ADMIN)
+# ===================================================================
+
+###
+# 7.1 Importar CSV (Apenas Admin)
+# (Funciona apenas se 'BrunoMelloAdmin' for 'is_staff=True')
+
+POST {{base_url}}/ordens-servico/importar-csv/
+Authorization: Bearer {{access_token}}
+Content-Type: multipart/form-data; boundary=----WebKitFormBoundary7MA4YWxkTrZu0gW
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW
+Content-Disposition: form-data; name="file"; filename="import.csv"
+Content-Type: text/csv
+
+protocol,so_number,type,status,recipient_name,cpf,provider,priority,description
+PROT-100,OS-100,administrative,open,Cliente CSV 1,111.111.111-11,technical,low,Descricao do CSV 1
+PROT-101,OS-101,installation,in_progress,Cliente CSV 2,222.222.222-22,specialized,high,Descricao do CSV 2
+PROT-102,OS-102,budget,open,Cliente CSV 3,333.333.333-33,consulting,medium,Descricao do CSV 3
+
+------WebKitFormBoundary7MA4YWxkTrZu0gW--
+
+###
+# 7.2 Listar todas as ordens (para ver as importadas)
+GET {{base_url}}/ordens-servico/
+Authorization: Bearer {{access_token}}

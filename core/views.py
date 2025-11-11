@@ -2,7 +2,9 @@ import csv
 import io
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework import generics, permissions, status
+from rest_framework.filters import SearchFilter, OrderingFilter
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.views import TokenObtainPairView
@@ -12,10 +14,18 @@ from rest_framework.permissions import AllowAny
 
 from .models import ServiceOrder
 from .serializers import (
-    UserSerializer, 
-    UserRegistrationSerializer, 
-    ServiceOrderSerializer
+    UserProfileSerializer,
+    UserSerializer,
+    UserRegistrationSerializer,
+    ServiceOrderSerializer,
+    PasswordResetConfirmSerializer
 )
+
+from django.utils.http import urlsafe_base64_encode
+from django.core.mail import send_mail
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_bytes
+from django.conf import settings
 
 User = get_user_model()
 
@@ -23,13 +33,13 @@ class IsAdminOrOwnerOrCreator(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if request.user and request.user.is_staff:
             return True
-        
+
         if isinstance(obj, User):
             return obj == request.user
-        
+
         if isinstance(obj, ServiceOrder):
             return obj.created_by == request.user
-            
+
         return False
 
 class UserRegisterView(generics.CreateAPIView):
@@ -57,7 +67,7 @@ class ServiceOrderListCreateView(generics.ListCreateAPIView):
         user = self.request.user
         if user.is_staff:
             return ServiceOrder.objects.all().order_by('-created_at')
-        
+
         return ServiceOrder.objects.filter(created_by=user).order_by('-created_at')
 
 class ServiceOrderDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -86,26 +96,26 @@ class ServiceOrderImportCSVView(APIView):
         try:
             data_set = csv_file.read().decode('utf-8')
             io_string = io.StringIO(data_set)
-            
+
             reader = csv.DictReader(io_string)
-            
+
             created_count = 0
             errors = []
-            
+
             with transaction.atomic():
                 for i, row in enumerate(reader):
                     serializer = ServiceOrderSerializer(
                         data=row,
                         context={'request': request}
                     )
-                    
+
                     if serializer.is_valid():
                         serializer.save()
                         created_count += 1
                     else:
-                        
+
                         errors.append({
-                            'row': i + 2, 
+                            'row': i + 2,
                             'data': row,
                             'errors': serializer.errors
                         })
@@ -119,61 +129,81 @@ class ServiceOrderImportCSVView(APIView):
             )
 
         except Exception as e:
-            
+
             return Response(
                 {
-                    'status': 'erro', 
+                    'status': 'erro',
                     'message': f"Falha na importação: {str(e)}",
-                    'errors': errors 
+                    'errors': errors
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
 
 @api_view(['POST'])
-@permission_classes([AllowAny]) 
+@permission_classes([AllowAny])
 def register_user(request):
     if request.method == 'POST':
         serializer = UserRegistrationSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
-            
+
             return Response(
                 {"message": f"User '{user.username}' created successfully."},
                 status=status.HTTP_201_CREATED
             )
-        
+
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class UserList(generics.ListAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    
+
 
 class UserDetail(generics.RetrieveAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
-    
+
+class UserProfileView(generics.RetrieveUpdateAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
 
 class OrdemServicoList(generics.ListCreateAPIView):
+
     queryset = ServiceOrder.objects.all()
     serializer_class = ServiceOrderSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    filter_backends = [
+        DjangoFilterBackend,
+        SearchFilter,
+        OrderingFilter
+    ]
+
+    filterset_fields = ['status', 'priority', 'type', 'provider']
+
+    search_fields = ['protocol', 'so_number', 'description', 'recipient_name']
+
+    ordering_fields = ['created_at', 'priority']
 
     def perform_create(self, serializer):
-        
-        serializer.save()
+        serializer.save(created_by=self.request.user)
 
 class OrdemServicoDetail(generics.RetrieveUpdateDestroyAPIView):
     queryset = ServiceOrder.objects.all()
     serializer_class = ServiceOrderSerializer
-    
+
 
 class _OrdemServicoImportCSV(APIView):
     def post(self, request, *args, **kwargs):
         return Response({"message": "CSV Import endpoint is working"}, status=status.HTTP_200_OK)
-    
+
 class OrdemServicoImportCSV(APIView):
-    permission_classes = [permissions.IsAuthenticated] 
-    
+    permission_classes = [permissions.IsAuthenticated]
+
     def post(self, request, *args, **kwargs):
         csv_file = request.FILES.get('file')
         if not csv_file:
@@ -196,10 +226,76 @@ class OrdemServicoImportCSV(APIView):
         serializer = ServiceOrderSerializer(data=csv_data, many=True, context={'request': request})
 
         if serializer.is_valid():
-            serializer.save() 
+            serializer.save()
             return Response(
                 {"message": f"Successfully imported {len(serializer.data)} service orders."},
                 status=status.HTTP_201_CREATED
             )
         else:
             return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_request(request):
+    email = request.data.get('email')
+    if not email:
+        return Response(
+            {'error': 'O campo de e-mail é obrigatório.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response(
+            {'message': 'Se um usuário com este e-mail existir, um link de redefinição foi enviado.'},
+            status=status.HTTP_200_OK
+        )
+
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+
+    frontend_url = 'http://localhost:5173'
+
+    reset_link = f"{frontend_url}/resetar-senha/?uid={uid}&token={token}"
+
+    subject = 'Redefina sua senha'
+    message = f"""
+    Olá, {user.username}!
+
+    Você solicitou a redefinição de senha. Clique no link abaixo:
+    {reset_link}
+
+    Se você não solicitou isso, por favor ignore este e-mail.
+    """
+
+    send_mail(
+        subject=subject,
+        message=message,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+    )
+
+    return Response(
+        {'message': 'Se um usuário com este e-mail existir, um link de redefinição foi enviado.'},
+        status=status.HTTP_200_OK
+    )
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_confirm(request):
+    serializer = PasswordResetConfirmSerializer(data=request.data)
+
+    if serializer.is_valid():
+        serializer.save()
+        return Response(
+            {'message': 'Senha redefinida com sucesso.'},
+            status=status.HTTP_200_OK
+        )
+    else:
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def hello_world(request):
+    return Response({"message": "hello"})

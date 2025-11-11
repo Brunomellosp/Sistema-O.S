@@ -68,15 +68,15 @@ POST {{base_url}}/ordens-servico/
 Authorization: Bearer {{access_token}}
 Content-Type: application/json
 
-{
+{ 
   "protocol": "PROT-2025-002",
   "so_number": "OS-002",
   "type": "preventive_maintenance",
   "status": "in_progress",
-  "provider": "specialized",
-  "priority": "low",
   "recipient_name": "Cliente MacBook Ltda",
   "cpf": "987.654.321-00",
+  "provider": "specialized",
+  "priority": "low",
   "description": "Verificação anual no servidor macOS."
 }
 
