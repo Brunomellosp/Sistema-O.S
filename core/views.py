@@ -27,6 +27,10 @@ from django.contrib.auth.tokens import default_token_generator
 from django.utils.encoding import force_bytes
 from django.conf import settings
 
+from .serializers import ChangePasswordSerializer
+
+from django.shortcuts import render, redirect, get_object_or_404
+
 User = get_user_model()
 
 class IsAdminOrOwnerOrCreator(permissions.BasePermission):
@@ -294,6 +298,34 @@ def password_reset_confirm(request):
         )
     else:
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class ChangePasswordView(generics.UpdateAPIView):
+    serializer_class = ChangePasswordSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+    def update(self, request, *args, **kargs):
+        user = self.get_object()
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": "Senha alterada com sucesso."}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+def presentation_user_list(request):
+    users = User.objects.all().order_by("-date_joined")
+    return render(request, "presentation_users.html", {"users": users})
+
+def presentation_user_delete(request, pk):
+    if request.method == "POST":
+        user_to_delete = get_object_or_404(User, pk=pk)
+        user_to_delete.delete()
+
+    return redirect("presentation-list")
 
 @api_view(['GET'])
 @permission_classes([AllowAny])

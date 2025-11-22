@@ -22,13 +22,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-#xmj$7!13z-qu0fx!end=-d90$26=q-9i^enpzfbcr+2*h%e9_'
+SECRET_KEY = config('SECRET_KEY', default='django-insecure-#xmj$7!13z-qu0fx!end=-d90$26=q-9i^enpzfbcr+2*h%e9_')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['sigos-backend.fly.dev', 'localhost', '127.0.0.1']
 
+CSRF_TRUSTED_ORIGINS = ['https://sigos-backend.fly.dev']
 
 # Application definition
 INSTALLED_APPS = [
@@ -49,7 +50,7 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:5173',
 ]
 
-# CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = True
 
 PASSWORD_HASHERS = [
     'django.contrib.auth.hashers.PBKDF2PasswordHasher',
@@ -69,9 +70,9 @@ DATABASES = {
 }
 
 REST_FRAMEWORK = {
-    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.CustomPagination',
 
-    'PAGE_SIZE': 20,
+    'PAGE_SIZE': 10,
 
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -84,6 +85,7 @@ REST_FRAMEWORK = {
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -149,6 +151,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
@@ -161,6 +165,6 @@ EMAIL_BACKEND = 'core.email_backends.DirectMXEmailBackend'
 
 DEFAULT_FROM_EMAIL = 'nao-responda@sigos.com.br'
 
-PASSWORD_RESET_TIMEOUT = 3600  # 1 hora
+PASSWORD_RESET_TIMEOUT = 3600 * 4  # 4 horas
 
 APPEND_SLASH=False

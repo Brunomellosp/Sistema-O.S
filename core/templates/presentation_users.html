@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerenciar Usuários</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            padding-top: 50px;
+            margin: 0;
+        }
+        .card {
+            background: white;
+            width: 90%;
+            max-width: 1000px;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            padding: 30px;
+        }
+        h1 {
+            color: #1a1a1a;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .badge {
+            background-color: #e3f2fd;
+            color: #0d47a1;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 0.8rem;
+            border: 1px solid #bbdefb;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        th {
+            text-align: left;
+            padding: 15px;
+            background-color: #f8f9fa;
+            color: #666;
+            font-weight: 600;
+            border-bottom: 2px solid #eee;
+        }
+        td {
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+            vertical-align: middle;
+        }
+        tr:hover {
+            background-color: #fafafa;
+        }
+        .user-info h3 {
+            margin: 0;
+            font-size: 1rem;
+            color: #333;
+        }
+        .user-info span {
+            font-size: 0.85rem;
+            color: #777;
+        }
+        .btn-delete {
+            background-color: #fff;
+            color: #dc3545;
+            border: 1px solid #dc3545;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        .btn-delete:hover {
+            background-color: #dc3545;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="card">
+        <h1>
+            Usuários Cadastrados
+            <span class="badge">Gerenciamento</span>
+        </h1>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Usuário</th>
+                    <th>Detalhes</th>
+                    <th>Função</th>
+                    <th style="text-align: right;">Ação</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td>
+                        <div class="user-info">
+                            <h3>{{ user.username }}</h3>
+                            <span>ID: {{ user.id|truncatechars:13 }}</span>
+                        </div>
+                    </td>
+                    <td>{{ user.email }}</td>
+                    <td>
+                        {% if user.is_superuser %}
+                            <strong style="color: #6f42c1;">Admin</strong>
+                        {% else %}
+                            Usuário
+                        {% endif %}
+                    </td>
+                    <td style="text-align: right;">
+                        <form action="{% url 'presentation-delete' user.id %}" method="POST" onsubmit="return confirm('Deletar {{ user.username }}?');">
+                            {% csrf_token %}
+                            <button type="submit" class="btn-delete">Excluir</button>
+                        </form>
+                    </td>
+                </tr>
+                {% empty %}
+                <tr>
+                    <td colspan="4" style="text-align:center; padding: 30px; color: #999;">
+                        Nenhum usuário encontrado.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+</body>
+</html>
