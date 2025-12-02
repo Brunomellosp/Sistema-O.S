@@ -3,7 +3,6 @@
 import os
 import sys
 
-
 def main():
     """Run administrative tasks."""
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
@@ -17,6 +16,14 @@ def main():
         ) from exc
     execute_from_command_line(sys.argv)
 
-
 if __name__ == '__main__':
     main()
+
+# ---- Vercel WSGI entry point ----
+import django
+from django.core.wsgi import get_wsgi_application
+
+# Ensure settings are loaded (same module as above)
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+django.setup()
+application = get_wsgi_application()

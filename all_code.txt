@@ -1,0 +1,1460 @@
+
+*FILE*: core/views.py
+import csv
+import io
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from django_filters.rest_framework import DjangoFilterBackend
+from rest_framework import generics, permissions, status
+from rest_framework.filters import SearchFilter, OrderingFilter
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.views import TokenObtainPairView
+
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+
+from .models import ServiceOrder
+from .serializers import (
+    UserProfileSerializer,
+    UserSerializer,
+    UserRegistrationSerializer,
+    ServiceOrderSerializer,
+    PasswordResetConfirmSerializer
+)
+
+from django.utils.http import urlsafe_base64_encode
+from django.core.mail import send_mail
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_bytes
+from django.conf import settings
+
+from .serializers import ChangePasswordSerializer
+
+User = get_user_model()
+
+class IsAdminOrOwnerOrCreator(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        if request.user and request.user.is_staff:
+            return True
+
+        if isinstance(obj, User):
+            return obj == request.user
+
+        if isinstance(obj, ServiceOrder):
+            return obj.created_by == request.user
+
+        return False
+
+class UserRegisterView(generics.CreateAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserRegistrationSerializer
+    permission_classes = [permissions.AllowAny]
+
+class UserListView(generics.ListAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [permissions.IsAdminUser]
+
+
+class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+    permission_classes = [IsAdminOrOwnerOrCreator]
+
+
+class ServiceOrderListCreateView(generics.ListCreateAPIView):
+    serializer_class = ServiceOrderSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return ServiceOrder.objects.all().order_by('-created_at')
+
+        return ServiceOrder.objects.filter(created_by=user).order_by('-created_at')
+
+class ServiceOrderDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = ServiceOrder.objects.all()
+    serializer_class = ServiceOrderSerializer
+    permission_classes = [IsAdminOrOwnerOrCreator]
+
+class ServiceOrderImportCSVView(APIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        csv_file = request.FILES.get('file')
+
+        if not csv_file:
+            return Response(
+                {"error": "Nenhum arquivo 'file' foi enviado."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not csv_file.name.endswith('.csv'):
+            return Response(
+                {"error": "O arquivo deve ser um .csv"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            data_set = csv_file.read().decode('utf-8')
+            io_string = io.StringIO(data_set)
+
+            reader = csv.DictReader(io_string)
+
+            created_count = 0
+            errors = []
+
+            with transaction.atomic():
+                for i, row in enumerate(reader):
+                    serializer = ServiceOrderSerializer(
+                        data=row,
+                        context={'request': request}
+                    )
+
+                    if serializer.is_valid():
+                        serializer.save()
+                        created_count += 1
+                    else:
+
+                        errors.append({
+                            'row': i + 2,
+                            'data': row,
+                            'errors': serializer.errors
+                        })
+
+                if errors:
+                    raise Exception("Erros de validação ocorreram durante a importação.")
+
+            return Response(
+                {'status': 'sucesso', 'imported': created_count},
+                status=status.HTTP_201_CREATED
+            )
+
+        except Exception as e:
+
+            return Response(
+                {
+                    'status': 'erro',
+                    'message': f"Falha na importação: {str(e)}",
+                    'errors': errors
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def register_user(request):
+    if request.method == 'POST':
+        serializer = UserRegistrationSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+
+            return Response(
+                {"message": f"User '{user.username}' created successfully."},
+                status=status.HTTP_201_CREATED
+            )
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class UserList(generics.ListAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+
+
+class UserDetail(generics.RetrieveAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserSerializer
+
+class UserProfileView(generics.RetrieveUpdateAPIView):
+    queryset = User.objects.all()
+    serializer_class = UserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+class OrdemServicoList(generics.ListCreateAPIView):
+
+    queryset = ServiceOrder.objects.all()
+    serializer_class = ServiceOrderSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    filter_backends = [
+        DjangoFilterBackend,
+        SearchFilter,
+        OrderingFilter
+    ]
+
+    filterset_fields = ['status', 'priority', 'type', 'provider']
+
+    search_fields = ['protocol', 'so_number', 'description', 'recipient_name']
+
+    ordering_fields = ['created_at', 'priority']
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+class OrdemServicoDetail(generics.RetrieveUpdateDestroyAPIView):
+    queryset = ServiceOrder.objects.all()
+    serializer_class = ServiceOrderSerializer
+
+
+class _OrdemServicoImportCSV(APIView):
+    def post(self, request, *args, **kwargs):
+        return Response({"message": "CSV Import endpoint is working"}, status=status.HTTP_200_OK)
+
+class OrdemServicoImportCSV(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+        csv_file = request.FILES.get('file')
+        if not csv_file:
+            return Response({"error": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not csv_file.name.endswith('.csv'):
+            return Response({"error": "File must be a CSV."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            decoded_file = csv_file.read().decode('utf-8-sig')
+            io_string = io.StringIO(decoded_file)
+            reader = csv.DictReader(io_string)
+            csv_data = list(reader)
+        except Exception as e:
+            return Response({"error": f"Could not process CSV file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not csv_data:
+            return Response({"error": "CSV file is empty."}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = ServiceOrderSerializer(data=csv_data, many=True, context={'request': request})
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(
+                {"message": f"Successfully imported {len(serializer.data)} service orders."},
+                status=status.HTTP_201_CREATED
+            )
+        else:
+            return Response({"errors": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_request(request):
+    email = request.data.get('email')
+    if not email:
+        return Response(
+            {'error': 'O campo de e-mail é obrigatório.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response(
+            {'message': 'Se um usuário com este e-mail existir, um link de redefinição foi enviado.'},
+            status=status.HTTP_200_OK
+        )
+
+    uid = urlsafe_base64_encode(force_bytes(user.pk))
+    token = default_token_generator.make_token(user)
+
+    frontend_url = 'http://localhost:5173'
+
+    reset_link = f"{frontend_url}/resetar-senha/?uid={uid}&token={token}"
+
+    subject = 'Redefina sua senha'
+    message = f"""
+    Olá, {user.username}!
+
+    Você solicitou a redefinição de senha. Clique no link abaixo:
+    {reset_link}
+
+    Se você não solicitou isso, por favor ignore este e-mail.
+    """
+
+    send_mail(
+        subject=subject,
+        message=message,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[user.email],
+    )
+
+    return Response(
+        {'message': 'Se um usuário com este e-mail existir, um link de redefinição foi enviado.'},
+        status=status.HTTP_200_OK
+    )
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def password_reset_confirm(request):
+    serializer = PasswordResetConfirmSerializer(data=request.data)
+
+    if serializer.is_valid():
+        serializer.save()
+        return Response(
+            {'message': 'Senha redefinida com sucesso.'},
+            status=status.HTTP_200_OK
+        )
+    else:
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class ChangePasswordView(generics.UpdateAPIView):
+    serializer_class = ChangePasswordSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+    def update(self, request, *args, **kargs):
+        user = self.get_object()
+        serializer = self.get_serializer(data=request.data, context={'request': request})
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": "Senha alterada com sucesso."}, status=status.HTTP_200_OK)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def hello_world(request):
+    return Response({"message": "hello"})
+
+*FILE*: core/urls.py
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('auth/register/', views.register_user, name='register'),
+    path('users/', views.UserList.as_view(), name='user-list'),
+    path('users/<uuid:pk>/', views.UserDetail.as_view(), name='user-detail'),
+    path('ordens-servico/', views.OrdemServicoList.as_view(), name='ordem-list'),
+    path('ordens-servico/<uuid:pk>/', views.OrdemServicoDetail.as_view(), name='ordem-detail'),
+    path('ordens-servico/importar-csv/', views.OrdemServicoImportCSV.as_view(), name='ordem-import-csv'),
+    path('auth/user/', views.UserProfileView.as_view(), name='auth-user-profile'),
+    path('auth/password-reset/', views.password_reset_request, name='password-reset-request'),
+    path('auth/password-reset/confirm/', views.password_reset_confirm, name='password-reset-confirm'),
+    path('auth/change-password/', views.ChangePasswordView.as_view(), name='auth-change-password'),
+    path('hello/', views.hello_world, name='hello-world'),
+]
+
+*FILE*: core/tests.py
+import io
+from datetime import timedelta
+from django.utils import timezone
+from django.urls import reverse
+from rest_framework.test import APITestCase
+from rest_framework import status
+from .models import User, ServiceOrder as OrdemServico
+
+class AuthTests(APITestCase):
+    """
+    Testes para Autenticação (Registro, Login, Perfil).
+    Esta é a base, vamos manter por enquanto.
+    """
+
+    def setUp(self):
+        # Dados de um usuário de teste
+        self.user_data = {
+            'username': 'testuser',
+            'email': 'test@example.com',
+            'password': 'StrongPassword123'
+        }
+        # URL do endpoint de registro
+        self.register_url = reverse('register')
+        # URL do endpoint de perfil
+        self.profile_url = reverse('auth-user-profile')
+
+    def test_register_user_success(self):
+        """Testa o registro de usuário com sucesso."""
+        response = self.client.post(self.register_url, self.user_data, format='json')
+
+        # Verifica se o status code é 201 Created
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        # Verifica se o usuário foi realmente criado no banco
+        self.assertEqual(User.objects.count(), 1)
+        # Verifica se o username está correto
+        self.assertEqual(User.objects.get().username, 'testuser')
+        # Verifica se a senha foi hasheada (não está em texto plano)
+        self.assertNotEqual(User.objects.get().password, 'StrongPassword123')
+
+    def test_login_user_success(self):
+        """Testa o login de usuário com sucesso."""
+        # Primeiro, cria o usuário
+        User.objects.create_user(**self.user_data)
+
+        # URL do endpoint de login (SimpleJWT)
+        login_url = reverse('token_obtain_pair')
+
+        # Tenta fazer login
+        response = self.client.post(login_url, {
+            'username': self.user_data['username'],
+            'password': self.user_data['password']
+        }, format='json')
+
+        # Verifica se o status code é 200 OK
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Verifica se os tokens 'access' e 'refresh' foram retornados
+        self.assertIn('access', response.data)
+        self.assertIn('refresh', response.data)
+
+    def test_get_user_profile_authenticated(self):
+        """Testa se um usuário logado consegue ver seu perfil."""
+        user = User.objects.create_user(**self.user_data)
+        # Força a autenticação (login)
+        self.client.force_authenticate(user=user)
+
+        response = self.client.get(self.profile_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['username'], user.username)
+        self.assertEqual(response.data['email'], user.email)
+
+    #Vamos comentar este por enquanto para simplificar
+    def test_patch_user_profile(self):
+        """Testa se o usuário logado consegue atualizar seu perfil."""
+        user = User.objects.create_user(**self.user_data)
+        self.client.force_authenticate(user=user)
+
+        new_data = {
+            'first_name': 'Test',
+            'last_name': 'User Updated'
+        }
+        response = self.client.patch(self.profile_url, new_data, format='json')
+
+        # Recarrega o usuário do banco de dados
+        user.refresh_from_db()
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(user.first_name, 'Test')
+        self.assertEqual(user.last_name, 'User Updated')
+
+
+class OrdemServicoTests(APITestCase):
+    """Testes para o CRUD e funcionalidades das Ordens de Serviço"""
+
+    def setUp(self):
+        # Cria um usuário comum e um admin com emails únicos
+        self.user = User.objects.create_user(
+            username='user',
+            password='123',
+            email='user@example.com'
+        )
+        self.admin = User.objects.create_user(
+            username='admin',
+            password='123',
+            is_staff=True,
+            email='admin@example.com'
+        )
+
+        # Autentica o usuário comum para a maioria dos testes
+        self.client.force_authenticate(user=self.user)
+
+        # URLs
+        self.list_url = reverse('ordem-list')
+
+        # Cria uma OS de teste (High Priority)
+        self.os1 = OrdemServico.objects.create(
+            created_by=self.user,
+            protocol="PROT-001",
+            so_number="OS-001",
+            recipient_name="Cliente Teste 1",
+            description="Descrição teste 1 (Windows)",
+            priority="high",
+            status="open",
+            cpf="111.111.111-11"
+        )
+
+        # Cria uma OS de teste (Low Priority, antiga) - COMENTADO
+        self.os2 = OrdemServico.objects.create(
+            created_by=self.user,
+            protocol="PROT-002",
+            so_number="OS-002",
+            recipient_name="Cliente Teste 2",
+            description="Descrição teste 2 (Linux)",
+            priority="low",
+            status="completed",
+            cpf="222.222.222-22"
+        )
+
+        # Altera a data da OS 2 para ser antiga
+        self.os2.created_at = timezone.now() - timedelta(days=5)
+        self.os2.save()
+
+        self.detail_url = reverse('ordem-detail', kwargs={'pk': self.os1.pk})
+
+    def test_list_ordens(self):
+        """Testa a listagem de OS (básico)."""
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Verifica se a resposta tem a estrutura de paginação (DRF Padrão)
+        self.assertIn('count', response.data)
+        self.assertIn('results', response.data)
+        self.assertEqual(response.data['count'], 1)
+
+    def test_create_ordem_servico(self):
+        """Testa a criação de uma nova OS."""
+        data = {
+            "protocol": "PROT-003",
+            "so_number": "OS-003",
+            "type": "installation",
+            "status": "open",
+            "provider": "technical",
+            "priority": "medium",
+            "recipient_name": "Cliente Novo",
+            "cpf": "333.333.333-33",
+            "description": "Instalar Office"
+        }
+        response = self.client.post(self.list_url, data, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(OrdemServico.objects.count(), 2) # Agora são 2 (1 do setUp + 1 novo)
+        # Verifica se o 'criado_por' foi salvo corretamente
+        new_os = OrdemServico.objects.get(protocol="PROT-003")
+        self.assertEqual(new_os.created_by, self.user)
+
+    # --- TESTES AVANÇADOS COMENTADOS PARA FOCAR NOS BÁSICOS PRIMEIRO ---
+
+    def test_sla_fields_in_list(self):
+        """Testa se os campos de SLA e CPF anonimizado estão na resposta."""
+        response = self.client.get(self.list_url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # Ordenação padrão pode não ser garantida, então buscamos a OS certa
+        os_data = next(item for item in response.data['results'] if item['protocol'] == 'PROT-001')
+
+        # Verifica campos de SLA
+        self.assertIn('due_date', os_data)
+        self.assertIn('sla_status', os_data)
+        self.assertIn('time_remaining_seconds', os_data)
+
+        # Verifica anonimização do CPF
+        self.assertIn('cpf_anonimo', os_data)
+        self.assertEqual(os_data['cpf_anonimo'], '111.***.***-11')
+        self.assertNotIn('cpf', os_data) # O CPF original não deve estar
+
+    def test_sla_status_logic(self):
+        """Testa a lógica de status do SLA (overdue, on_time)."""
+        # A OS 1 (high priority) vence em 24h, deve estar 'on_time' ou 'nearing_due_date'
+        response = self.client.get(reverse('ordem-detail', kwargs={'pk': self.os1.pk}))
+        self.assertIn(response.data['sla_status'], ['on_time', 'nearing_due_date'])
+
+        # A OS 2 (completed) deve estar 'on_time'
+        response = self.client.get(reverse('ordem-detail', kwargs={'pk': self.os2.pk}))
+        self.assertEqual(response.data['sla_status'], 'on_time')
+
+        # Força a OS 1 a estar vencida (cria ela 30h atrás)
+        self.os1.created_at = timezone.now() - timedelta(hours=30)
+        self.os1.save()
+        response = self.client.get(reverse('ordem-detail', kwargs={'pk': self.os1.pk}))
+        self.assertEqual(response.data['sla_status'], 'overdue')
+
+
+    def test_filter_by_status(self):
+        """Testa o filtro por status."""
+        response = self.client.get(self.list_url + '?status=open')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['protocol'], 'PROT-001')
+
+    def test_search_by_description(self):
+        """Testa a busca por texto na descrição."""
+        response = self.client.get(self.list_url + '?search=windows')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['protocol'], 'PROT-001')
+
+    def test_ordering_by_created_at(self):
+        """Testa a ordenação por data de criação (mais novas primeiro)."""
+        response = self.client.get(self.list_url + '?ordering=-criado_em')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        # A OS 1 (mais nova) deve vir primeiro
+        self.assertEqual(response.data['results'][0]['protocol'], 'PROT-001')
+
+    def test_patch_ordem_servico(self):
+        """Testa a atualização (PATCH) de uma OS."""
+        data = {'status': 'in_progress', 'description': 'Atualizado'}
+        response = self.client.patch(self.detail_url, data, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], 'in_progress')
+        self.assertEqual(response.data['description'], 'Atualizado')
+
+        # Verifica no banco
+        self.os1.refresh_from_db()
+        self.assertEqual(self.os1.status, 'in_progress')
+
+    def test_delete_ordem_servico(self):
+        """Testa o delete de uma OS."""
+        response = self.client.delete(self.detail_url)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(OrdemServico.objects.count(), 0) # Ajustado para 0
+
+
+# --- CLASSE DE TESTE COMENTADA PARA FOCAR NOS BÁSICOS PRIMEIRO ---
+
+class CSVImportTests(APITestCase):
+    """Testes específicos para o endpoint de importação de CSV."""
+
+    def setUp(self):
+        # Cria usuários com emails únicos
+        self.user = User.objects.create_user(
+            username='user',
+            password='123',
+            is_staff=False,
+            email='csvuser@example.com'
+        )
+        self.admin = User.objects.create_user(
+            username='admin',
+            password='123',
+            is_staff=True,
+            email='csvadmin@example.com'
+        )
+        self.import_url = reverse('ordem-import-csv')
+
+        # Cria um CSV de teste em memória
+        self.csv_content = (
+            "protocol,so_number,type,status,recipient_name,cpf,provider,priority,description\n"
+            "PROT-100,OS-100,administrative,open,CSV 1,111.111.111-11,technical,low,Desc 1\n"
+            "PROT-101,OS-101,installation,in_progress,CSV 2,222.222.222-22,specialized,high,Desc 2\n"
+        )
+        self.csv_file = io.StringIO(self.csv_content)
+        self.csv_file.name = "test.csv"
+
+    def test_csv_import_admin_success(self):
+        """Testa se o Admin consegue importar um CSV com sucesso."""
+        self.client.force_authenticate(user=self.admin)
+
+        # Reseta o ponteiro do arquivo
+        self.csv_file.seek(0)
+
+        response = self.client.post(
+            self.import_url,
+            {'file': self.csv_file},
+            format='multipart'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['message'], "Importado com sucesso 2 ordens de serviço.")
+        self.assertEqual(OrdemServico.objects.count(), 2)
+        # Verifica se o 'criado_por' foi o admin
+        self.assertEqual(OrdemServico.objects.first().created_by, self.admin)
+
+    def test_csv_import_regular_user_forbidden(self):
+        """Testa se um usuário comum (não-staff) recebe 403 Forbidden."""
+        self.client.force_authenticate(user=self.user)
+
+        self.csv_file.seek(0)
+
+        response = self.client.post(
+            self.import_url,
+            {'file': self.csv_file},
+            format='multipart'
+        )
+
+        # Graças ao [permissions.IsAdminUser], esperamos 403
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(OrdemServico.objects.count(), 0)
+
+    def test_csv_import_invalid_data(self):
+        """Testa a importação com dados inválidos (ex: prioridade errada)."""
+        self.client.force_authenticate(user=self.admin)
+
+        invalid_csv_content = (
+            "protocol,so_number,type,status,recipient_name,cpf,provider,priority,description\n"
+            "PROT-100,OS-100,admin,open,CSV 1,111.111.111-11,tech,prioridade_invalida,Desc 1\n"
+        )
+        invalid_file = io.StringIO(invalid_csv_content)
+        invalid_file.name = "invalid.csv"
+
+        response = self.client.post(
+            self.import_url,
+            {'file': invalid_file},
+            format='multipart'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('error', response.data)
+        self.assertIn('details', response.data)
+        # Verifica se o erro específico da 'priority' foi reportado
+        self.assertIn('priority', response.data['details'][0])
+
+
+*FILE*: core/serializers.py
+from datetime import timedelta
+from django.utils import timezone
+from rest_framework import serializers
+from .models import User, ServiceOrder, ServiceOrderType, ServiceOrderStatus, ServiceProviderType, ServiceOrderPriority
+
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.http import urlsafe_base64_decode
+from django.utils.encoding import force_str
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
+
+class UserSerializer(serializers.ModelSerializer):
+    created_at = serializers.DateTimeField(source='date_joined', read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            'id',
+            'username',
+            'email',
+            'first_name',
+            'last_name',
+            'created_at',
+            'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+class UserRegistrationSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'password', 'first_name', 'last_name']
+
+    def create(self, validated_data):
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data.get('first_name', ''),
+            last_name=validated_data.get('last_name', '')
+        )
+        return user
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = [
+            'id',
+            'username',
+            'email',
+            'first_name',
+            'last_name',
+            'is_staff'
+        ]
+        read_only_fields = ['id', 'is_staff']
+
+    def validate_username(self, value):
+        user = self.context['request'].user
+        if User.objects.exclude(pk=user.pk).filter(username=value).exists():
+            raise serializers.ValidationError('Este nome de usuário já está em uso.')
+        return value
+
+    def validate_email(self, value):
+        user = self.context['request'].user
+        if User.objects.exclude(pk=user.pk).filter(email=value).exists():
+            raise serializers.ValidationError('Este e-mail já está em uso.')
+        return value
+
+class ServiceOrderSerializer(serializers.ModelSerializer):
+    created_by = serializers.StringRelatedField(read_only=True)
+
+    type_display = serializers.CharField(source='get_type_display', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    provider_display = serializers.CharField(source='get_provider_display', read_only=True)
+    priority_display = serializers.CharField(source='get_priority_display', read_only=True)
+
+    type = serializers.ChoiceField(choices=ServiceOrderType.choices)
+    status = serializers.ChoiceField(choices=ServiceOrderStatus.choices)
+    provider = serializers.ChoiceField(choices=ServiceProviderType.choices)
+    priority = serializers.ChoiceField(choices=ServiceOrderPriority.choices)
+
+    cpf_anonimo = serializers.SerializerMethodField(source='get_cpf_anonimo', read_only=True)
+
+    due_date = serializers.SerializerMethodField()
+    sla_status = serializers.SerializerMethodField()
+    time_remaining_seconds = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ServiceOrder
+        fields = [
+            'id',
+            'protocol',
+            'so_number',
+
+            'type',
+            'status',
+            'provider',
+            'priority',
+
+            'type_display',
+            'status_display',
+            'provider_display',
+            'priority_display',
+
+            'recipient_name',
+            'cpf',
+            'cpf_anonimo',
+
+            'description',
+
+            'created_by',
+            'created_at',
+            'updated_at',
+
+            'due_date',
+            'sla_status',
+            'time_remaining_seconds'
+        ]
+
+        read_only_fields = [
+            'id',
+            'created_by',
+            'created_at',
+            'updated_at',
+            'type_display',
+            'status_display',
+            'provider_display',
+            'priority_display',
+            'due_date',
+            'sla_status',
+            'time_remaining_seconds'
+        ]
+
+        extra_kwargs = {
+            'cpf': {'write_only': True}
+        }
+
+    def get_cpf_anonimo(self, obj):
+        if hasattr(obj, 'cpf') and isinstance(obj.cpf, str) and len(obj.cpf) == 14:
+            return f"{obj.cpf[:3]}.***.***-{obj.cpf[-2:]}"
+        return "N/A"
+
+    def _get_sla_hours(self, priority):
+        if priority == 'high':
+            return 24
+        elif priority == 'medium':
+            return 48
+        else:
+            return 72
+
+    def get_due_date(self, obj):
+        if not obj.created_at:
+            return None
+
+        hours = self._get_sla_hours(obj.priority)
+        return obj.created_at + timedelta(hours=hours)
+
+    def get_time_remaining_seconds(self, obj):
+        due_date = self.get_due_date(obj)
+        if not due_date:
+            return None
+
+        if obj.status == 'completed' or obj.status == 'concluida':
+             return 0
+
+        now = timezone.now()
+        remaining = due_date - now
+        return int(remaining.total_seconds())
+
+    def get_sla_status(self, obj):
+        if obj.status == 'completed' or obj.status == 'concluida':
+             return 'on_time'
+
+        time_remaining = self.get_time_remaining_seconds(obj)
+        if time_remaining is None:
+            return "N/A"
+
+        if time_remaining < 0:
+            return "overdue"
+
+        if time_remaining < (4 * 60 * 60):
+            return "nearing_due_date"
+
+        return "on_time"
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        validated_data['created_by'] = user
+        return super().create(validated_data)
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    uid = serializers.CharField(write_only=True)
+    token = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(write_only=True, style={'input_type': 'password'})
+
+    def validate(self, attrs):
+        uid = attrs.get('uid')
+        token = attrs.get('token')
+        new_password = attrs.get('new_password')
+
+        try:
+            user_id = force_str(urlsafe_base64_decode(uid))
+            self.user = User.objects.get(pk=user_id)
+        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            raise serializers.ValidationError({'detail': 'Token inválido ou expirado.'})
+
+        if not default_token_generator.check_token(self.user, token):
+            raise serializers.ValidationError({'detail': 'Token inválido ou expirado.'})
+
+        try:
+            validate_password(new_password, self.user)
+        except ValidationError as e:
+            raise serializers.ValidationError({'new_password': list(e.messages)})
+
+        attrs['user'] = self.user
+        return attrs
+
+    def save(self):
+        user = self.validated_data['user']
+        new_password = self.validated_data['new_password']
+
+        user.set_password(new_password)
+        user.save()
+
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+    new_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+
+    def validate_old_password(self, value):
+        user = self.context['request'].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("Sua senha antiga está incorreta.")
+        return value
+
+    def validate_new_password(self, value):
+        user = self.context['request'].user
+        try:
+            validate_password(value, user)
+        except ValidationError as e:
+            raise serializers.ValidationError(list(e.messages))
+        return value
+
+    def save(self):
+        user = self.context['request'].user
+        new_password = self.validated_data['new_password']
+        user.set_password(new_password)
+        user.save()
+
+*FILE*: core/permissions.py
+from rest_framework import permissions
+
+class IsAdminOrOwner(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        return request.user.is_staff or obj == request.user or obj.created_by == request.user
+
+*FILE*: core/pagination.py
+from rest_framework.pagination import PageNumberPagination
+
+class CustomPagination(PageNumberPagination):
+    page_size = 10
+
+    page_size_query_param = 'page_size'
+
+    max_page_size = 100
+
+*FILE*: core/models.py
+import uuid
+from django.conf import settings
+from django.contrib.auth.models import AbstractUser
+from django.db import models
+from django.utils.translation import gettext_lazy as _
+
+class User(AbstractUser):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    email = models.EmailField(_('email address'), unique=True, blank=False, null=False)
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'auth_user'
+        swappable = 'AUTH_USER_MODEL'
+        verbose_name = _('User')
+        verbose_name_plural = _('Users')
+        ordering = ['-date_joined']
+
+class ServiceOrderType(models.TextChoices):
+    ADMINISTRATIVE = 'administrative', _('Administrativa')
+    INSTALLATION = 'installation', _('Instalação')
+    PREVENTIVE_MAINTENANCE = 'preventive_maintenance', _('Manutenção Preventiva')
+    CORRECTIVE_MAINTENANCE = 'corrective_maintenance', _('Manutenção Corretiva')
+    PREDICTIVE_MAINTENANCE = 'predictive_maintenance', _('Manutenção Preditiva')
+    INSPECTION = 'inspection', _('Vistoria')
+    TECHNICAL_ASSISTANCE = 'technical_assistance', _('Assistência Técnica')
+    WORK_SAFETY = 'work_safety', _('Segurança do Trabalho')
+    BUDGET = 'budget', _('Orçamento')
+    EVENTS = 'events', _('Eventos')
+
+class ServiceOrderStatus(models.TextChoices):
+    OPEN = 'open', _('Aberta')
+    IN_PROGRESS = 'in_progress', _('Em andamento')
+    COMPLETED = 'completed', _('Concluída')
+    CANCELLED = 'cancelled', _('Cancelada')
+
+class ServiceProviderType(models.TextChoices):
+    TECHNICAL = 'technical', _('Técnico')
+    SPECIALIZED = 'specialized', _('Especializado')
+    CONSULTING = 'consulting', _('Consultivo')
+    ADMINISTRATIVE = 'administrative_provider', _('Administrativo')
+    LOGISTICS = 'logistics', _('Logístico')
+    OPERATIONAL = 'operational', _('Operacional')
+    TECHNOLOGICAL = 'technological', _('Tecnológico')
+    COMMERCIAL = 'commercial', _('Comercial')
+    MAINTENANCE = 'maintenance_provider', _('Manutenção')
+    SECURITY = 'security', _('Segurança')
+    EDUCATIONAL = 'educational', _('Educacional')
+    COMMUNICATION = 'communication', _('Comunicação')
+    OTHER = 'other', _('Outros Serviços')
+
+class ServiceOrderPriority(models.TextChoices):
+    CRITICAL = 'critical', _('Crítica')
+    HIGH = 'high', _('Alta')
+    MEDIUM = 'medium', _('Média')
+    LOW = 'low', _('Baixa')
+
+
+class ServiceOrder(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    protocol = models.CharField(max_length=100, unique=True, db_index=True, help_text=_("Protocolo único da O.S."))
+    so_number = models.CharField(max_length=100, db_index=True, verbose_name=_("Número da O.S."))
+
+    type = models.CharField(
+        max_length=50,
+        choices=ServiceOrderType.choices,
+        default=ServiceOrderType.CORRECTIVE_MAINTENANCE,
+        verbose_name=_("Tipo de Serviço")
+    )
+    status = models.CharField(
+        max_length=50,
+        choices=ServiceOrderStatus.choices,
+        default=ServiceOrderStatus.OPEN,
+        verbose_name=_("Status")
+    )
+    provider = models.CharField(
+        max_length=50,
+        choices=ServiceProviderType.choices,
+        default=ServiceProviderType.TECHNICAL,
+        verbose_name=_("Prestador")
+    )
+    priority = models.CharField(
+        max_length=50,
+        choices=ServiceOrderPriority.choices,
+        default=ServiceOrderPriority.MEDIUM,
+        verbose_name=_("Prioridade")
+    )
+
+    recipient_name = models.CharField(max_length=255, verbose_name=_("Nome do Recebedor/Cliente"))
+    cpf = models.CharField(max_length=14, blank=True, null=True, verbose_name=_("CPF"))
+
+    description = models.TextField(verbose_name=_("Descrição"))
+
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='service_orders',
+        verbose_name=_("Criado por")
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name=_("Criado em"))
+    updated_at = models.DateTimeField(auto_now=True, verbose_name=_("Atualizado em"))
+
+    class Meta:
+        verbose_name = _("Ordem de Serviço")
+        verbose_name_plural = _("Ordens de Serviço")
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"O.S. {self.so_number} ({self.get_status_display()})"
+
+*FILE*: core/migrations/__init__.py
+
+*FILE*: core/migrations/0001_initial.py
+# Generated by Django 4.2.24 on 2025-10-22 15:11
+
+from django.conf import settings
+import django.contrib.auth.models
+import django.contrib.auth.validators
+from django.db import migrations, models
+import django.db.models.deletion
+import django.utils.timezone
+import uuid
+
+
+class Migration(migrations.Migration):
+
+    initial = True
+
+    dependencies = [
+        ('auth', '0012_alter_user_first_name_max_length'),
+    ]
+
+    operations = [
+        migrations.CreateModel(
+            name='User',
+            fields=[
+                ('password', models.CharField(max_length=128, verbose_name='password')),
+                ('last_login', models.DateTimeField(blank=True, null=True, verbose_name='last login')),
+                ('is_superuser', models.BooleanField(default=False, help_text='Designates that this user has all permissions without explicitly assigning them.', verbose_name='superuser status')),
+                ('username', models.CharField(error_messages={'unique': 'A user with that username already exists.'}, help_text='Required. 150 characters or fewer. Letters, digits and @/./+/-/_ only.', max_length=150, unique=True, validators=[django.contrib.auth.validators.UnicodeUsernameValidator()], verbose_name='username')),
+                ('first_name', models.CharField(blank=True, max_length=150, verbose_name='first name')),
+                ('last_name', models.CharField(blank=True, max_length=150, verbose_name='last name')),
+                ('is_staff', models.BooleanField(default=False, help_text='Designates whether the user can log into this admin site.', verbose_name='staff status')),
+                ('is_active', models.BooleanField(default=True, help_text='Designates whether this user should be treated as active. Unselect this instead of deleting accounts.', verbose_name='active')),
+                ('date_joined', models.DateTimeField(default=django.utils.timezone.now, verbose_name='date joined')),
+                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ('email', models.EmailField(max_length=254, unique=True, verbose_name='email address')),
+                ('updated_at', models.DateTimeField(auto_now=True)),
+                ('groups', models.ManyToManyField(blank=True, help_text='The groups this user belongs to. A user will get all permissions granted to each of their groups.', related_name='user_set', related_query_name='user', to='auth.group', verbose_name='groups')),
+                ('user_permissions', models.ManyToManyField(blank=True, help_text='Specific permissions for this user.', related_name='user_set', related_query_name='user', to='auth.permission', verbose_name='user permissions')),
+            ],
+            options={
+                'verbose_name': 'User',
+                'verbose_name_plural': 'Users',
+                'db_table': 'auth_user',
+                'ordering': ['-date_joined'],
+                'swappable': 'AUTH_USER_MODEL',
+            },
+            managers=[
+                ('objects', django.contrib.auth.models.UserManager()),
+            ],
+        ),
+        migrations.CreateModel(
+            name='ServiceOrder',
+            fields=[
+                ('id', models.UUIDField(default=uuid.uuid4, editable=False, primary_key=True, serialize=False)),
+                ('protocol', models.CharField(db_index=True, help_text='Protocolo único da O.S.', max_length=100, unique=True)),
+                ('so_number', models.CharField(db_index=True, max_length=100, verbose_name='Número da O.S.')),
+                ('type', models.CharField(choices=[('administrative', 'Administrativa'), ('installation', 'Instalação'), ('preventive_maintenance', 'Manutenção Preventiva'), ('corrective_maintenance', 'Manutenção Corretiva'), ('predictive_maintenance', 'Manutenção Preditiva'), ('inspection', 'Vistoria'), ('technical_assistance', 'Assistência Técnica'), ('work_safety', 'Segurança do Trabalho'), ('budget', 'Orçamento'), ('events', 'Eventos')], default='corrective_maintenance', max_length=50, verbose_name='Tipo de Serviço')),
+                ('status', models.CharField(choices=[('open', 'Aberta'), ('in_progress', 'Em andamento'), ('completed', 'Concluída'), ('cancelled', 'Cancelada')], default='open', max_length=50, verbose_name='Status')),
+                ('provider', models.CharField(choices=[('technical', 'Técnico'), ('specialized', 'Especializado'), ('consulting', 'Consultivo'), ('administrative_provider', 'Administrativo'), ('logistics', 'Logístico'), ('operational', 'Operacional'), ('technological', 'Tecnológico'), ('commercial', 'Comercial'), ('maintenance_provider', 'Manutenção'), ('security', 'Segurança'), ('educational', 'Educacional'), ('communication', 'Comunicação'), ('other', 'Outros Serviços')], default='technical', max_length=50, verbose_name='Prestador')),
+                ('priority', models.CharField(choices=[('critical', 'Crítica'), ('high', 'Alta'), ('medium', 'Média'), ('low', 'Baixa')], default='medium', max_length=50, verbose_name='Prioridade')),
+                ('recipient_name', models.CharField(max_length=255, verbose_name='Nome do Recebedor/Cliente')),
+                ('cpf', models.CharField(blank=True, max_length=14, null=True, verbose_name='CPF')),
+                ('description', models.TextField(verbose_name='Descrição')),
+                ('created_at', models.DateTimeField(auto_now_add=True, verbose_name='Criado em')),
+                ('updated_at', models.DateTimeField(auto_now=True, verbose_name='Atualizado em')),
+                ('created_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='service_orders', to=settings.AUTH_USER_MODEL, verbose_name='Criado por')),
+            ],
+            options={
+                'verbose_name': 'Ordem de Serviço',
+                'verbose_name_plural': 'Ordens de Serviço',
+                'ordering': ['-created_at'],
+            },
+        ),
+    ]
+
+*FILE*: core/email_backends.py
+import smtplib
+import dns.resolver
+from collections import defaultdict
+from django.core.mail.backends.base import BaseEmailBackend
+from django.conf import settings
+
+class DirectMXEmailBackend(BaseEmailBackend):
+    """
+    Um Backend de E-mail Django que resolve o MX record
+    do domínio do destinatário e envia o e-mail diretamente.
+    """
+    def __init__(self, fail_silently=False, **kwargs):
+        super().__init__(fail_silently=fail_silently)
+
+    def send_messages(self, email_messages):
+        """
+        Envia um ou mais objetos EmailMessage.
+        Retorna o número de mensagens enviadas.
+        """
+        if not email_messages:
+            return 0
+
+        # Agrupa mensagens por domínio de destino
+        # (ex: todos os e-mails para '@gmail.com' vão juntos)
+        messages_by_domain = defaultdict(list)
+        for message in email_messages:
+
+            # --- CORREÇÃO AQUI ---
+            # O método correto é .recipients(), não .get_recipients()
+            for recipient in message.recipients():
+            # ---------------------
+
+                domain = recipient.split('@')[-1]
+                messages_by_domain[domain].append((message, recipient))
+
+        sent_count = 0
+
+        for domain, messages in messages_by_domain.items():
+            try:
+                # 1. Resolver o MX Record
+                mx_records = dns.resolver.resolve(domain, 'MX')
+                # Ordena por preferência e pega o de menor número (maior prioridade)
+                mx_records = sorted(mx_records, key=lambda r: r.preference)
+                mx_host = str(mx_records[0].exchange)
+
+                # 2. Conectar ao servidor de e-mail
+                with smtplib.SMTP(mx_host, 25, timeout=10) as server:
+
+                    # 3. Tentar usar uma conexão segura (STARTTLS)
+                    server.ehlo()
+                    if server.has_extn('starttls'):
+                        server.starttls()
+                        server.ehlo() # Re-identifica após TLS
+
+                    # 4. Enviar os e-mails para este domínio
+                    for message, recipient in messages:
+                        try:
+                            # Converte a mensagem do Django para bytes
+                            msg_bytes = message.message().as_bytes()
+                            # Envia o e-mail (para este destinatário específico)
+                            server.sendmail(
+                                message.from_email,
+                                [recipient],
+                                msg_bytes
+                            )
+                            sent_count += 1
+                        except smtplib.SMTPException as e:
+                            if not self.fail_silently:
+                                raise
+                            print(f"Falha ao enviar e-mail para {recipient}: {e}")
+
+            except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, smtplib.SMTPException) as e:
+                # Se o DNS falhar ou o SMTP falhar para o domínio inteiro
+                if not self.fail_silently:
+                    raise
+                print(f"Falha ao conectar ao servidor para o domínio {domain}: {e}")
+
+        return sent_count
+*FILE*: core/decorators.py
+from rest_framework.decorators import permission_classes
+
+public = permission_classes([])
+
+*FILE*: core/apps.py
+from django.apps import AppConfig
+
+
+class CoreConfig(AppConfig):
+    default_auto_field = 'django.db.models.BigAutoField'
+    name = 'core'
+
+*FILE*: core/admin.py
+from django.contrib import admin
+
+# Register your models here.
+
+*FILE*: core/__init__.py
+
+*FILE*: config/wsgi.py
+"""
+WSGI config for config project.
+
+It exposes the WSGI callable as a module-level variable named ``application``.
+
+For more information on this file, see
+https://docs.djangoproject.com/en/4.2/howto/deployment/wsgi/
+"""
+
+import os
+
+from django.core.wsgi import get_wsgi_application
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+
+application = get_wsgi_application()
+
+*FILE*: config/urls.py
+from django.contrib import admin
+from django.urls import path, include
+from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('api/v1/auth/login/', TokenObtainPairView.as_view(), name='token_obtain_pair'),
+    path('api/v1/auth/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
+    path('api/v1/', include('core.urls')),
+]
+
+*FILE*: config/settings.py
+"""
+Django settings for config project.
+
+Generated by 'django-admin startproject' using Django 4.2.24.
+
+For more information on this file, see
+https://docs.djangoproject.com/en/4.2/topics/settings/
+
+For the full list of settings and their values, see
+https://docs.djangoproject.com/en/4.2/ref/settings/
+"""
+
+import os
+from decouple import config
+from pathlib import Path
+
+# Build paths inside the project like this: BASE_DIR / 'subdir'.
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+# Quick-start development settings - unsuitable for production
+# See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
+
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = 'django-insecure-#xmj$7!13z-qu0fx!end=-d90$26=q-9i^enpzfbcr+2*h%e9_'
+
+# SECURITY WARNING: don't run with debug turned on in production!
+DEBUG = True
+
+ALLOWED_HOSTS = []
+
+
+# Application definition
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'rest_framework',
+    'corsheaders',
+    'django_filters',
+    'core',
+]
+
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+]
+
+CORS_ALLOW_ALL_ORIGINS = True
+
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+]
+
+DJANGO_SALT = config('DJANGO_SALT', default='salt-fixo-para-testes-ABCD123456')
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': config('DB_NAME', default='oss_db'),
+        'USER': config('DB_USER', default='postgres'),
+        'PASSWORD': config('DB_PASS', default='postgres'),
+        'HOST': config('DB_HOST', default='localhost'),
+        'PORT': config('DB_PORT', default='5432'),
+    }
+}
+
+REST_FRAMEWORK = {
+    'DEFAULT_PAGINATION_CLASS': 'core.pagination.CustomPagination',
+
+    'PAGE_SIZE': 10,
+
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
+
+MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]
+
+ROOT_URLCONF = 'config.urls'
+
+TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [],
+        'APP_DIRS': True,
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.debug',
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = 'config.wsgi.application'
+
+# Password validation
+# https://docs.djangoproject.com/en/4.2/ref/settings/#auth-password-validators
+
+AUTH_USER_MODEL = 'core.User'
+
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
+
+
+# Internationalization
+# https://docs.djangoproject.com/en/4.2/topics/i18n/
+
+LANGUAGE_CODE = 'en-us'
+
+TIME_ZONE = 'UTC'
+
+USE_I18N = True
+
+USE_TZ = True
+
+
+# Static files (CSS, JavaScript, Images)
+# https://docs.djangoproject.com/en/4.2/howto/static-files/
+
+STATIC_URL = 'static/'
+
+# Default primary key field type
+# https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
+
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+
+EMAIL_BACKEND = 'core.email_backends.DirectMXEmailBackend'
+
+DEFAULT_FROM_EMAIL = 'nao-responda@sigos.com.br'
+
+PASSWORD_RESET_TIMEOUT = 3600 * 4  # 4 horas
+
+APPEND_SLASH=False
+
+*FILE*: config/asgi.py
+"""
+ASGI config for config project.
+
+It exposes the ASGI callable as a module-level variable named ``application``.
+
+For more information on this file, see
+https://docs.djangoproject.com/en/4.2/howto/deployment/asgi/
+"""
+
+import os
+
+from django.core.asgi import get_asgi_application
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
+
+application = get_asgi_application()
+
+*FILE*: config/__init__.py

@@ -1,7 +1,9 @@
+import re
 from datetime import timedelta
 from django.utils import timezone
 from rest_framework import serializers
 from .models import User, ServiceOrder, ServiceOrderType, ServiceOrderStatus, ServiceProviderType, ServiceOrderPriority
+from .validators import validate_cpf
 
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_decode
@@ -26,11 +28,20 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at']
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+    password = serializers.CharField(
+        write_only=True,
+        required=True,
+        min_length=6,
+        max_length=30,
+        style={'input_type': 'password'}
+    )
 
     class Meta:
         model = User
         fields = ['username', 'email', 'password', 'first_name', 'last_name']
+        extra_kwargs = {
+            'username': {'min_length': 5, 'max_length': 30}
+        }
 
     def create(self, validated_data):
         user = User.objects.create_user(
@@ -86,6 +97,12 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
     due_date = serializers.SerializerMethodField()
     sla_status = serializers.SerializerMethodField()
     time_remaining_seconds = serializers.SerializerMethodField()
+
+    cpf = serializers.CharField(
+        write_only=True,
+        required=True,
+        validators=[validate_cpf],
+    )
 
     class Meta:
         model = ServiceOrder
@@ -193,7 +210,13 @@ class ServiceOrderSerializer(serializers.ModelSerializer):
 class PasswordResetConfirmSerializer(serializers.Serializer):
     uid = serializers.CharField(write_only=True)
     token = serializers.CharField(write_only=True)
-    new_password = serializers.CharField(write_only=True, style={'input_type': 'password'})
+    new_password = serializers.CharField(
+        write_only=True,
+        required=True,
+        min_length=6,
+        max_length=30,
+        style={'input_type': 'password'}
+    )
 
     def validate(self, attrs):
         uid = attrs.get('uid')
@@ -226,7 +249,13 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 
 class ChangePasswordSerializer(serializers.Serializer):
     old_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
-    new_password = serializers.CharField(write_only=True, required=True, style={'input_type': 'password'})
+    new_password = serializers.CharField(
+        write_only=True,
+        required=True,
+        min_length=6,
+        max_length=30,
+        style={'input_type': 'password'}
+    )
 
     def validate_old_password(self, value):
         user = self.context['request'].user
@@ -247,3 +276,4 @@ class ChangePasswordSerializer(serializers.Serializer):
         new_password = self.validated_data['new_password']
         user.set_password(new_password)
         user.save()
+

@@ -211,10 +211,10 @@ class OrdemServicoImportCSV(APIView):
     def post(self, request, *args, **kwargs):
         csv_file = request.FILES.get('file')
         if not csv_file:
-            return Response({"error": "No file uploaded."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Nenhum arquivo enviado."}, status=status.HTTP_400_BAD_REQUEST)
 
         if not csv_file.name.endswith('.csv'):
-            return Response({"error": "File must be a CSV."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "O arquive deve ser um CSV."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             decoded_file = csv_file.read().decode('utf-8-sig')
@@ -222,17 +222,17 @@ class OrdemServicoImportCSV(APIView):
             reader = csv.DictReader(io_string)
             csv_data = list(reader)
         except Exception as e:
-            return Response({"error": f"Could not process CSV file: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": f"Não foi possível processar o arquivo CSV: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
         if not csv_data:
-            return Response({"error": "CSV file is empty."}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "CSV está vázio."}, status=status.HTTP_400_BAD_REQUEST)
 
         serializer = ServiceOrderSerializer(data=csv_data, many=True, context={'request': request})
 
         if serializer.is_valid():
             serializer.save()
             return Response(
-                {"message": f"Successfully imported {len(serializer.data)} service orders."},
+                {"message": f"Importado com sucesso {len(serializer.data)} ordens de serviço."},
                 status=status.HTTP_201_CREATED
             )
         else:
@@ -259,7 +259,7 @@ def password_reset_request(request):
     uid = urlsafe_base64_encode(force_bytes(user.pk))
     token = default_token_generator.make_token(user)
 
-    frontend_url = 'http://localhost:5173'
+    frontend_url = 'https://sistema-os-frontend.vercel.app'
 
     reset_link = f"{frontend_url}/resetar-senha/?uid={uid}&token={token}"
 
