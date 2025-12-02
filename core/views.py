@@ -261,7 +261,7 @@ def password_reset_request(request):
 
     frontend_url = 'https://sistema-os-frontend.vercel.app'
 
-    reset_link = f"{frontend_url}/resetar-senha/?uid={uid}&token={token}"
+    reset_link = f"{frontend_url}/#/resetar-senha/?uid={uid}&token={token}"
 
     subject = 'Redefina sua senha'
     message = f"""
@@ -272,7 +272,6 @@ def password_reset_request(request):
 
     Se você não solicitou isso, por favor ignore este e-mail.
     """
-
     send_mail(
         subject=subject,
         message=message,
