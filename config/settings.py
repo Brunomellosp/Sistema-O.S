@@ -27,7 +27,7 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-#xmj$7!13z-qu0fx!end=
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = ['sigos-backend.fly.dev', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['sigos-backend.fly.dev', 'localhost', '127.0.0.1', 'sistema-os-frontend.vercel.app', 'sistema-osfrontend.vercel.app']
 
 CSRF_TRUSTED_ORIGINS = ['https://sigos-backend.fly.dev']
 
@@ -152,7 +152,7 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 #STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATIC_ROOT = os.path.join(BASE_DIR, 'static')
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Default primary key field type
